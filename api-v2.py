@@ -19,6 +19,21 @@ EMPTY_MANIFESTS = {
 
 CONFIG_DB = dict()
 
+
+def _to_nix_str_list(items):
+    return "[" + " ".join(f'"{x}"' for x in items) + "]"
+
+
+def _get_layers(attribute_path):
+    subprocess.check_output(['nix-build', 'template.nix', '--arg', 'attributepath',  _to_nix_str_list(attribute_path)])
+
+    result = json.loads(pathlib.Path('./result').read_text())
+    for x in pathlib.Path(result['layers']).glob('*'):
+        yield x.resolve()
+
+    yield pathlib.Path(result['toplayer']).resolve()
+
+
 def _layer_from_path(path: pathlib.Path):
     "Translate the output from `mkManyPureLayers` to what docker expects."
     layer = path.joinpath('layer.tar')
@@ -29,6 +44,8 @@ def _layer_from_path(path: pathlib.Path):
     digest = 'sha256:' + hashlib.sha256(gzip_bytes).hexdigest()
     layer_sha256 = 'sha256:' + hashlib.sha256(layer.read_bytes()).hexdigest()
 
+    CONFIG_DB[digest] = gzip_bytes
+
     return {
         "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
         "size": size,
@@ -37,12 +54,10 @@ def _layer_from_path(path: pathlib.Path):
     }
 
 
-def _build_layers():
+def _build_layers(attribute_path):
     # TODO(tom): need to connect entry point to actual nix (see template.nix
     # for how I generated the path below)
-    entrypoint = pathlib.Path('/nix/store/3vi7bz32hdfh26k07ipy96k1ar99lw0q-hi-granular-docker-layers/')
-    entrypoint = pathlib.Path('./entrypoint')
-    for x in sorted(entrypoint.glob('*'), reverse=True):
+    for x in _get_layers(attribute_path):
         yield _layer_from_path(x)
 
 
@@ -56,6 +71,7 @@ def v2():
     return response
 
 
+
 @app.route('/v2/<path:name>/blobs/<string:reference>')
 def blobs(name, reference):
     if reference in CONFIG_DB:
@@ -64,20 +80,20 @@ def blobs(name, reference):
             mimetype='application/vnd.docker.container.image.v1+json',
         )
 
-
-    entrypoint = pathlib.Path('/nix/store/3vi7bz32hdfh26k07ipy96k1ar99lw0q-hi-granular-docker-layers/')
-    entrypoint = pathlib.Path('./entrypoint')
-    for x in sorted(entrypoint.glob('*'), reverse=True):
-        layer = _layer_from_path(x)
-        if layer['digest'] == reference:
-            return subprocess.check_output(['gzip', '--fast'], stdin=x.joinpath('layer.tar').open())
+    #for x in _get_layers(attribute_path):
+    #    layer = _layer_from_path(x)
+    #    if layer['digest'] == reference:
+    #        return subprocess.check_output(['gzip', '--fast'], stdin=x.joinpath('layer.tar').open())
     flask.abort(404)
 
 
 @app.route('/v2/<path:name>/manifests/<string:reference>')
 def manifests(name, reference):
     m = EMPTY_MANIFESTS
-    m['layers'] = list(_build_layers())
+
+    attribute_path = name.split('/')
+
+    m['layers'] = list(_build_layers(attribute_path))
 
     rootfs = {
         "architecture": "amd64",
@@ -109,6 +125,7 @@ def manifests(name, reference):
     )
     response.headers['Docker-Distribution-API-Version'] = 'registry/2.0'
     return response
+
 
 def main():
     app.run()
