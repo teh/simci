@@ -10,6 +10,7 @@ layer1 = dockerTools.mkManyPureLayers {
       name = "Blarg";
       closure = contents;
       configJson = configJson;
+      maxLayers = 100;
     };
 custom = dockerTools.mkCustomisationLayer {
   name = "blarg2";

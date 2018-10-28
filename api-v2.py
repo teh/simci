@@ -7,17 +7,17 @@ import pathlib
 import json
 import subprocess
 import hashlib
+import diskcache
 
 app = flask.Flask(__name__)
 
+dcache = diskcache.FanoutCache('/tmp/simci-cache/', shards=4, timeout=2, eviction_policy='least-recently-used')
 
 EMPTY_MANIFESTS = {
     "schemaVersion": 2,
     "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
 }
 
-
-CONFIG_DB = dict()
 
 
 def _to_nix_str_list(items):
@@ -36,22 +36,28 @@ def _get_layers(attribute_path):
 
 def _layer_from_path(path: pathlib.Path):
     "Translate the output from `mkManyPureLayers` to what docker expects."
+    cache_key = str(path)
+    if cache_key in dcache:
+        return dcache[cache_key]
+
     layer = path.joinpath('layer.tar')
     size = layer.stat().st_size
     meta = json.loads(path.joinpath('json').read_text())
 
-    gzip_bytes = subprocess.check_output(['gzip', '--fast'], stdin=layer.open())
+    gzip_bytes = subprocess.check_output(['pigz', '--fast'], stdin=layer.open())
     digest = 'sha256:' + hashlib.sha256(gzip_bytes).hexdigest()
     layer_sha256 = 'sha256:' + hashlib.sha256(layer.read_bytes()).hexdigest()
 
-    CONFIG_DB[digest] = gzip_bytes
+    dcache[digest] = gzip_bytes
 
-    return {
+    layer_meta = {
         "mediaType": "application/vnd.docker.image.rootfs.diff.tar.gzip",
         "size": size,
         "digest": digest, # compressed
         "layer_sha256": layer_sha256, # uncompressed
     }
+    dcache[cache_key] = layer_meta
+    return layer_meta
 
 
 def _build_layers(attribute_path):
@@ -74,16 +80,12 @@ def v2():
 
 @app.route('/v2/<path:name>/blobs/<string:reference>')
 def blobs(name, reference):
-    if reference in CONFIG_DB:
+    if reference in dcache:
         return app.response_class(
-            response=CONFIG_DB[reference],
+            response=dcache[reference],
             mimetype='application/vnd.docker.container.image.v1+json',
         )
 
-    #for x in _get_layers(attribute_path):
-    #    layer = _layer_from_path(x)
-    #    if layer['digest'] == reference:
-    #        return subprocess.check_output(['gzip', '--fast'], stdin=x.joinpath('layer.tar').open())
     flask.abort(404)
 
 
@@ -91,7 +93,7 @@ def blobs(name, reference):
 def manifests(name, reference):
     m = EMPTY_MANIFESTS
 
-    attribute_path = name.split('/')
+    attribute_path = reference.split('.')
 
     m['layers'] = list(_build_layers(attribute_path))
 
@@ -114,7 +116,7 @@ def manifests(name, reference):
         "digest": digest,
     }
 
-    CONFIG_DB[digest] = json_bytes
+    dcache[digest] = json_bytes
 
     print(json_bytes.decode('utf8'))
     print(json.dumps(m, indent=4))
