@@ -1,4 +1,4 @@
-{ attributepath ? ["hello"] }: with (import <nixpkgs> {}).pkgs;
+{ attributepath ? ["hello"], tarPath }: with (import (builtins.fetchTarball tarPath) {}).pkgs;
 let
 contents = lib.getAttrFromPath attributepath pkgs;
 configJson = writeText "layers.json" (builtins.toJSON {

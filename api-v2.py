@@ -19,12 +19,26 @@ EMPTY_MANIFESTS = {
 }
 
 
+def _git_checkout(sha):
+    # TODO(tom): ensure clone if repo not yet cloned.
+    # TODO(tom): cache
+    tar = subprocess.check_output(['git', '--git-dir', '/home/tom/src/nixpkgs/.git', 'archive', '--prefix', 'ar/', sha])
+    tar_path = f'/tmp/{sha}.tar'
+    with open(tar_path, 'wb') as f:
+        f.write(tar)
+    return tar_path
+
+
 def _to_nix_str_list(items):
     return "[" + " ".join(f'"{x}"' for x in items) + "]"
 
 
-def _get_layers(attribute_path):
-    subprocess.check_output(['nix-build', 'template.nix', '--arg', 'attributepath',  _to_nix_str_list(attribute_path)])
+def _get_layers(attribute_path, tar_path):
+    subprocess.check_output([
+        'nix-build', 'template.nix',
+        '--arg', 'attributepath',  _to_nix_str_list(attribute_path),
+        '--argstr', 'tarPath', 'file://' + tar_path,
+    ])
 
     result = json.loads(pathlib.Path('./result').read_text())
     for x in pathlib.Path(result['layers']).glob('*'):
@@ -59,10 +73,10 @@ def _layer_from_path(path: pathlib.Path):
     return layer_meta
 
 
-def _build_layers(attribute_path):
+def _build_layers(attribute_path, tar_path):
     # TODO(tom): need to connect entry point to actual nix (see template.nix
     # for how I generated the path below)
-    for x in _get_layers(attribute_path):
+    for x in _get_layers(attribute_path, tar_path):
         yield _layer_from_path(x)
 
 
@@ -90,9 +104,11 @@ def blobs(name, reference):
 def manifests(name, reference):
     m = EMPTY_MANIFESTS
 
+    tar_path = _git_checkout(name)
+
     attribute_path = reference.split('.')
 
-    m['layers'] = list(_build_layers(attribute_path))
+    m['layers'] = list(_build_layers(attribute_path, tar_path))
 
     rootfs = {
         "architecture": "amd64",
