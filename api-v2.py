@@ -19,7 +19,6 @@ EMPTY_MANIFESTS = {
 }
 
 
-
 def _to_nix_str_list(items):
     return "[" + " ".join(f'"{x}"' for x in items) + "]"
 
@@ -72,21 +71,19 @@ def v2():
     # > When a 200 OK or 401 Unauthorized response is returned, the
     # > “Docker-Distribution-API-Version” header should be set to “registry/2.0”
     response = app.response_class("")
-    print(flask.request.headers)
     response.headers['Docker-Distribution-API-Version'] = 'registry/2.0'
     return response
 
 
-
 @app.route('/v2/<path:name>/blobs/<string:reference>')
 def blobs(name, reference):
-    if reference in dcache:
-        return app.response_class(
-            response=dcache[reference],
-            mimetype='application/vnd.docker.container.image.v1+json',
-        )
+    if reference not in dcache:
+        flask.abort(404)
 
-    flask.abort(404)
+    return app.response_class(
+        response=dcache[reference],
+        mimetype='application/vnd.docker.container.image.v1+json',
+    )
 
 
 @app.route('/v2/<path:name>/manifests/<string:reference>')
